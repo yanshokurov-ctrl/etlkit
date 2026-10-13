@@ -6,25 +6,40 @@ using Xunit;
 namespace EtlKit.Common.Tests;
 
 /// <summary>
-/// Characterization tests for the driver-dependent half of <see cref="DataTypeConverter"/>:
-/// <see cref="DataTypeConverter.TryGetDBSpecificType"/>, which rewrites a column's SQL type for the
-/// target engine. They pin today's per-engine rules, quirks included (upper-casing, untrimmed
-/// pass-through, <c>varchar(max)</c> not counting as a char type), so the rules can move out of
-/// the central <c>switch</c> without changing what <c>CreateTableTask</c> emits. A quirk pinned
-/// here is not an endorsement: fixing one is a separate change that updates its expectation on
-/// purpose.
+/// Behavioral contract of the engine-specific SQL type conventions: the SQL type a column is
+/// created with on each engine. Every implementation runs the same expectations, so the rules
+/// can move between assemblies without changing what <c>CreateTableTask</c> emits; the concrete
+/// subclasses are <see cref="ConnectionManagerTypeConventionsTests"/> and <see
+/// cref="DataTypeConverterConventionsForwardingTests"/>. The expectations pin today's rules,
+/// quirks included (upper-casing, untrimmed pass-through, <c>varchar(max)</c> not counting as a
+/// char type). A quirk pinned here is not an endorsement: fixing one is a separate change that
+/// updates its expectation on purpose.
 /// </summary>
-public sealed class DataTypeConverterDriverConventionsTests
+public abstract class DbTypeConventionsContractTests
 {
-    private static string MapType(
+    /// <summary>
+    /// The SQL type that <paramref name="engine"/> creates <paramref name="column"/> with.
+    /// </summary>
+    protected abstract string MapType(ConnectionManagerType engine, ITableColumn column);
+
+    private string MapType(
         ConnectionManagerType engine,
         string dataType,
         bool allowNulls = false
-    ) =>
-        DataTypeConverter.TryGetDBSpecificType(
-            new TableColumn("col", dataType, allowNulls),
-            engine
-        );
+    ) => MapType(engine, new TableColumn("col", dataType, allowNulls));
+
+    // Every engine that has a connection manager. Unknown has none and is covered where the
+    // engine-keyed facade is tested.
+    private static readonly ConnectionManagerType[] Engines =
+    [
+        ConnectionManagerType.Adomd,
+        ConnectionManagerType.MySql,
+        ConnectionManagerType.SqlServer,
+        ConnectionManagerType.SQLite,
+        ConnectionManagerType.Access,
+        ConnectionManagerType.Postgres,
+        ConnectionManagerType.ClickHouse,
+    ];
 
     // ── matrix: every engine x typical column types x nullability ────────────
 
@@ -49,7 +64,6 @@ public sealed class DataTypeConverterDriverConventionsTests
 
     private static readonly EngineRow[] Matrix =
     [
-        new(ConnectionManagerType.Unknown, MatrixTypes),
         new(ConnectionManagerType.Adomd, MatrixTypes),
         new(ConnectionManagerType.MySql, MatrixTypes),
         new(
@@ -105,8 +119,8 @@ public sealed class DataTypeConverterDriverConventionsTests
     }
 
     [Theory]
-    [MemberData(nameof(MatrixCases))]
-    public void TryGetDBSpecificType_Matrix_ReturnsEngineSpecificType(
+    [MemberData(nameof(MatrixCases), MemberType = typeof(DbTypeConventionsContractTests))]
+    public void Matrix_ReturnsEngineSpecificType(
         ConnectionManagerType engine,
         string dataType,
         bool allowNulls,
@@ -115,15 +129,16 @@ public sealed class DataTypeConverterDriverConventionsTests
 
     // Adding an engine must be a conscious decision: it has to get a row in the matrix above.
     [Fact]
-    public void Matrix_CoversEveryConnectionManagerType()
+    public void Matrix_CoversEveryEngineExceptUnknown()
     {
         var covered = Matrix.Select(row => row.Engine).ToHashSet();
 
         var missing = Enum.GetValues<ConnectionManagerType>()
-            .Where(engine => !covered.Contains(engine))
+            .Where(engine => engine != ConnectionManagerType.Unknown && !covered.Contains(engine))
             .ToList();
 
         Assert.Empty(missing);
+        Assert.Equal(Engines.OrderBy(e => e), covered.OrderBy(e => e));
     }
 
     // ── engines without conventions ──────────────────────────────────────────
@@ -134,12 +149,7 @@ public sealed class DataTypeConverterDriverConventionsTests
         {
             var data = new TheoryData<ConnectionManagerType, string, bool>();
             foreach (
-                var engine in new[]
-                {
-                    ConnectionManagerType.Unknown,
-                    ConnectionManagerType.Adomd,
-                    ConnectionManagerType.MySql,
-                }
+                var engine in new[] { ConnectionManagerType.Adomd, ConnectionManagerType.MySql }
             )
             {
                 foreach (
@@ -162,24 +172,20 @@ public sealed class DataTypeConverterDriverConventionsTests
     }
 
     [Theory]
-    [MemberData(nameof(UnchangedCases))]
-    public void TryGetDBSpecificType_EngineWithoutConventions_ReturnsDataTypeVerbatim(
+    [MemberData(nameof(UnchangedCases), MemberType = typeof(DbTypeConventionsContractTests))]
+    public void EngineWithoutConventions_ReturnsDataTypeVerbatim(
         ConnectionManagerType engine,
         string dataType,
         bool allowNulls
     ) => Assert.Equal(dataType, MapType(engine, dataType, allowNulls));
 
     [Fact]
-    public void TryGetDBSpecificType_UndefinedEngineValue_ReturnsDataTypeVerbatim() =>
-        Assert.Equal("  nvarchar(300) ", MapType((ConnectionManagerType)999, "  nvarchar(300) "));
-
-    [Fact]
-    public void TryGetDBSpecificType_DoesNotModifyTheColumn()
+    public void MapType_DoesNotModifyTheColumn()
     {
         var column = new TableColumn("col", "  nvarchar(300) ", allowNulls: true);
 
-        foreach (var engine in Enum.GetValues<ConnectionManagerType>())
-            DataTypeConverter.TryGetDBSpecificType(column, engine);
+        foreach (var engine in Engines)
+            MapType(engine, column);
 
         Assert.Equal("  nvarchar(300) ", column.DataType);
         Assert.True(column.AllowNulls);
@@ -200,7 +206,7 @@ public sealed class DataTypeConverterDriverConventionsTests
     [InlineData("  int  ", "  int  ")]
     [InlineData("nvarchar(300)", "nvarchar(300)")]
     [InlineData("datetime", "datetime")]
-    public void TryGetDBSpecificType_SqlServer_RewritesOnlyText(string dataType, string expected) =>
+    public void SqlServer_RewritesOnlyText(string dataType, string expected) =>
         Assert.Equal(expected, MapType(ConnectionManagerType.SqlServer, dataType));
 
     // ── Access ───────────────────────────────────────────────────────────────
@@ -227,10 +233,8 @@ public sealed class DataTypeConverterDriverConventionsTests
     [InlineData("datetime", "datetime")]
     [InlineData("varchar(max)", "varchar(max)")]
     [InlineData("  bigint  ", "  bigint  ")]
-    public void TryGetDBSpecificType_Access_AdaptsIntAndCharTypes(
-        string dataType,
-        string expected
-    ) => Assert.Equal(expected, MapType(ConnectionManagerType.Access, dataType));
+    public void Access_AdaptsIntAndCharTypes(string dataType, string expected) =>
+        Assert.Equal(expected, MapType(ConnectionManagerType.Access, dataType));
 
     // ── SQLite ───────────────────────────────────────────────────────────────
 
@@ -247,10 +251,8 @@ public sealed class DataTypeConverterDriverConventionsTests
     [InlineData("varchar(50)", "varchar(50)")]
     [InlineData("text", "text")]
     [InlineData("datetime", "datetime")]
-    public void TryGetDBSpecificType_SQLite_MapsIntAndBigIntToInteger(
-        string dataType,
-        string expected
-    ) => Assert.Equal(expected, MapType(ConnectionManagerType.SQLite, dataType));
+    public void SQLite_MapsIntAndBigIntToInteger(string dataType, string expected) =>
+        Assert.Equal(expected, MapType(ConnectionManagerType.SQLite, dataType));
 
     // ── PostgreSQL ───────────────────────────────────────────────────────────
 
@@ -274,10 +276,8 @@ public sealed class DataTypeConverterDriverConventionsTests
     [InlineData("bit", "bit")]
     [InlineData("nvarchar(max)", "nvarchar(max)")]
     [InlineData("ntext", "ntext")]
-    public void TryGetDBSpecificType_Postgres_AdaptsCharTypesAndDateTime(
-        string dataType,
-        string expected
-    ) => Assert.Equal(expected, MapType(ConnectionManagerType.Postgres, dataType));
+    public void Postgres_AdaptsCharTypesAndDateTime(string dataType, string expected) =>
+        Assert.Equal(expected, MapType(ConnectionManagerType.Postgres, dataType));
 
     // ── ClickHouse ───────────────────────────────────────────────────────────
 
@@ -300,7 +300,7 @@ public sealed class DataTypeConverterDriverConventionsTests
     [InlineData("text", false, "text")]
     [InlineData("datetime", true, "Nullable(datetime)")]
     [InlineData("  Int32  ", false, "  Int32  ")]
-    public void TryGetDBSpecificType_ClickHouse_AdaptsCharTypesAndWrapsNullable(
+    public void ClickHouse_AdaptsCharTypesAndWrapsNullable(
         string dataType,
         bool allowNulls,
         string expected

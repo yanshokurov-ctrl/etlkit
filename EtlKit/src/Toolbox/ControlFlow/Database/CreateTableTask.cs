@@ -186,7 +186,7 @@ namespace EtlKit.ControlFlow
             var type = ConnectionType switch
             {
                 ConnectionManagerType.SqlServer when col.HasComputedColumn => string.Empty,
-                _ => DataTypeConverter.TryGetDBSpecificType(col, ConnectionType),
+                _ => GetDbSpecificType(col),
             };
             if (!col.IsIdentity)
             {
@@ -201,6 +201,17 @@ namespace EtlKit.ControlFlow
                 _ => $"IDENTITY({col.IdentitySeed ?? 1},{col.IdentityIncrement ?? 1})",
             };
             return (type, identitySql);
+        }
+
+        // Connection managers supply their own engine's rules. A custom IConnectionManager that is
+        // not a DbConnectionManager<T> has none and keeps the central, engine-keyed rules.
+        private string GetDbSpecificType(ITableColumn col)
+        {
+            if (DbConnectionManager is IDbTypeConventionsProvider provider)
+                return provider.TypeConventions.GetDbSpecificType(col);
+#pragma warning disable CS0618
+            return DataTypeConverter.TryGetDBSpecificType(col, ConnectionType);
+#pragma warning restore CS0618
         }
 
         private string CreateNotNullSql(ITableColumn col)

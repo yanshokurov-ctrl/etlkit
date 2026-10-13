@@ -1,9 +1,8 @@
 #nullable enable
 using System.Text.RegularExpressions;
-using EtlKit.ClickHouse.ConnectionManager;
-using EtlKit.ConnectionManager;
 using EtlKit.ControlFlow;
 using EtlKit.Primitives;
+using Moq;
 using Xunit;
 
 namespace EtlKit.Common.Tests;
@@ -12,40 +11,29 @@ namespace EtlKit.Common.Tests;
 /// Database-free snapshot tests for <see cref="CreateTableTask.Sql"/>. The DDL is built from a
 /// real connection manager per engine, so the engine's quote characters, type conventions and
 /// identity/nullability rules all take part, but nothing is ever opened or executed. They pin the
-/// DDL that the per-engine type rules must keep producing once they move out of
-/// <see cref="DataTypeConverter"/> (see
-/// docs/tech-debt/TECH-DEBT-DataTypeConverter-Driver-Split.md). Expectations were recorded from
-/// the current behavior and reviewed; whitespace is collapsed so only the content is compared.
+/// DDL that the per-engine type conventions must keep producing, wherever those conventions live
+/// (see docs/tech-debt/TECH-DEBT-DataTypeConverter-Driver-Split.md). Expectations were recorded
+/// from the current behavior and reviewed; whitespace is collapsed so only the content is
+/// compared.
 /// </summary>
 public sealed class CreateTableTaskSqlTests
 {
-    private static IConnectionManager CreateManager(ConnectionManagerType engine) =>
-        engine switch
-        {
-            ConnectionManagerType.SqlServer => new SqlConnectionManager(
-                "Data Source=localhost;Initial Catalog=sample"
-            ),
-            ConnectionManagerType.Postgres => new PostgresConnectionManager(
-                "Host=localhost;Database=sample"
-            ),
-            ConnectionManagerType.MySql => new MySqlConnectionManager(
-                "Server=localhost;Database=sample"
-            ),
-            ConnectionManagerType.SQLite => new SQLiteConnectionManager("Data Source=:memory:"),
-            ConnectionManagerType.Access => new AccessOdbcConnectionManager("Dbq=sample.accdb"),
-            ConnectionManagerType.ClickHouse => new ClickHouseConnectionManager(
-                "Host=localhost;Database=sample"
-            ),
-            _ => throw new ArgumentOutOfRangeException(nameof(engine), engine, null),
-        };
-
     private static string BuildSql(
         ConnectionManagerType engine,
         string tableName,
         List<TableColumn> columns
     )
     {
-        using var manager = CreateManager(engine);
+        using var manager = TestConnectionManagers.Create(engine);
+        return BuildSql(manager, tableName, columns);
+    }
+
+    private static string BuildSql(
+        IConnectionManager manager,
+        string tableName,
+        List<TableColumn> columns
+    )
+    {
         var task = new CreateTableTask(tableName, columns) { ConnectionManager = manager };
         return Regex.Replace(task.Sql, @"\s+", " ").Trim();
     }
@@ -146,5 +134,45 @@ public sealed class CreateTableTaskSqlTests
         ];
 
         Assert.Equal(expected, BuildSql(engine, "Seeded", columns));
+    }
+
+    // The ODBC manager reports the same engine as the native one, so both must emit the same DDL.
+    [Fact]
+    public void Sql_SqlServerOdbc_ProducesTheSameDdlAsTheNativeManager()
+    {
+        using var managerCase = TestConnectionManagers.Get("SqlServerOdbc");
+
+        var expected = BuildSql(
+            ConnectionManagerType.SqlServer,
+            "Customer",
+            CustomerColumns(identity: true)
+        );
+
+        Assert.Equal(
+            expected,
+            BuildSql(managerCase.Manager, "Customer", CustomerColumns(identity: true))
+        );
+    }
+
+    // A custom IConnectionManager that is not a DbConnectionManager supplies no conventions of its
+    // own, so CreateTableTask keeps applying the rules of the engine it reports.
+    [Fact]
+    public void Sql_CustomConnectionManager_UsesTheRulesOfTheEngineItReports()
+    {
+        var manager = Mock.Of<IConnectionManager>(m =>
+            m.ConnectionManagerType == ConnectionManagerType.Postgres
+            && m.QB == "\""
+            && m.QE == "\""
+        );
+        List<TableColumn> columns =
+        [
+            new("Name", "NVARCHAR(100)", allowNulls: false),
+            new("Created", "DATETIME", allowNulls: false),
+        ];
+
+        Assert.Equal(
+            "CREATE TABLE \"Custom\" ( \"Name\" VARCHAR(100) NOT NULL , \"Created\" TIMESTAMP NOT NULL )",
+            BuildSql(manager, "Custom", columns)
+        );
     }
 }

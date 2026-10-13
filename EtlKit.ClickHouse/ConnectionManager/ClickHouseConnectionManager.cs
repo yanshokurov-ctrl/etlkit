@@ -45,6 +45,14 @@ namespace EtlKit.ClickHouse.ConnectionManager
         /// <remarks>Always <see cref="CultureInfo.CurrentCulture"/>.</remarks>
         public override CultureInfo ConnectionCulture => CultureInfo.CurrentCulture;
 
+        /// <inheritdoc />
+        /// <remarks>
+        /// ClickHouse rules: <c>char(N)</c>-style types become <c>String</c>, and nullable columns are
+        /// wrapped in <c>Nullable(...)</c>.
+        /// </remarks>
+        public override IDbTypeConventions TypeConventions { get; } =
+            new ClickHouseTypeConventions();
+
         /// <summary>
         /// CSV configuration settings, initialized with <see cref="CultureInfo.InvariantCulture"/>.
         /// </summary>

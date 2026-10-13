@@ -4,11 +4,11 @@ using EtlKit.Primitives;
 namespace EtlKit.ConnectionManager
 {
     /// <summary>
-    /// Engine-specific SQL type conventions (<see cref="TryGetDBSpecificType"/>) and, for backward
-    /// compatibility, forwarding members for the driver-independent type mapping that now lives in
-    /// <see cref="SqlTypeMapper"/>. See
-    /// <c>docs/tech-debt/TECH-DEBT-DataTypeConverter-Driver-Split.md</c> for the planned move of the
-    /// engine-specific conventions out of this class as well.
+    /// Compatibility facade for SQL type handling that moved out of this class. The driver-independent
+    /// mapping lives in <see cref="SqlTypeMapper"/>; the engine-specific conventions are supplied by
+    /// each connection manager through <see cref="DbConnectionManager{TConnection}.TypeConventions"/>.
+    /// Every member here is obsolete and forwards to its replacement. See
+    /// <c>docs/tech-debt/TECH-DEBT-DataTypeConverter-Driver-Split.md</c>.
     /// </summary>
     [PublicAPI]
     public static class DataTypeConverter
@@ -120,47 +120,30 @@ namespace EtlKit.ConnectionManager
         /// </summary>
         /// <param name="col">The column whose type to adjust.</param>
         /// <param name="connectionType">The target database engine.</param>
+        /// <remarks>
+        /// Superseded by <see cref="DbConnectionManager{TConnection}.TypeConventions"/>, which each
+        /// connection manager supplies for its own engine. Kept for callers that only know the engine
+        /// type; it applies the same rules.
+        /// </remarks>
+        [Obsolete("Use DbConnectionManager<TConnection>.TypeConventions instead.")]
         public static string TryGetDBSpecificType(
             ITableColumn col,
             ConnectionManagerType connectionType
-        )
-        {
-            var typeName = col.DataType.Trim().ToUpper();
-            switch (connectionType)
+        ) =>
+            connectionType switch
             {
-                case ConnectionManagerType.SqlServer when typeName.Replace(" ", "") == "TEXT":
-                    return "VARCHAR(MAX)";
-                case ConnectionManagerType.Access when typeName == "INT":
-                    return "INTEGER";
-                case ConnectionManagerType.Access when SqlTypeMapper.IsCharTypeDefinition(typeName):
-                {
-                    if (typeName.StartsWith("N"))
-                        typeName = typeName.Substring(1);
-                    return SqlTypeMapper.GetStringLengthFromCharString(typeName) > 255
-                        ? "LONGTEXT"
-                        : typeName;
-                }
-                case ConnectionManagerType.Access:
-                    return col.DataType;
-                case ConnectionManagerType.SQLite when typeName is "INT" or "BIGINT":
-                    return "INTEGER";
-                case ConnectionManagerType.SQLite:
-                    return col.DataType;
-                case ConnectionManagerType.Postgres:
-                {
-                    return GetPostgreSqlType(typeName, col);
-                }
-                case ConnectionManagerType.ClickHouse:
-                {
-                    return GetClickHouseType(typeName, col);
-                }
-                case ConnectionManagerType.Unknown:
-                case ConnectionManagerType.Adomd:
-                case ConnectionManagerType.MySql:
-                default:
-                    return col.DataType;
-            }
-        }
+                ConnectionManagerType.SqlServer => new SqlServerTypeConventions().GetDbSpecificType(
+                    col
+                ),
+                ConnectionManagerType.Access => new AccessTypeConventions().GetDbSpecificType(col),
+                ConnectionManagerType.SQLite => new SqliteTypeConventions().GetDbSpecificType(col),
+                ConnectionManagerType.Postgres => new PostgresTypeConventions().GetDbSpecificType(
+                    col
+                ),
+                // The ClickHouse rule lives in EtlKit.ClickHouse, which this assembly cannot reference.
+                ConnectionManagerType.ClickHouse => GetClickHouseType(col),
+                _ => col.DataType,
+            };
 
         /// <summary>
         /// Returns the <see cref="System.DateTimeKind"/> implied by a SQL date/time type name — <see
@@ -173,22 +156,10 @@ namespace EtlKit.ConnectionManager
         public static DateTimeKind? GetNETDateTimeKind(string dbSpecificTypeName) =>
             SqlTypeMapper.GetNETDateTimeKind(dbSpecificTypeName);
 
-        private static string GetPostgreSqlType(string typeName, ITableColumn col)
-        {
-            if (SqlTypeMapper.IsCharTypeDefinition(typeName))
-            {
-                if (typeName.StartsWith("N"))
-                    return typeName.Substring(1);
-            }
-            else if (typeName == "DATETIME")
-                return "TIMESTAMP";
-            return col.DataType;
-        }
-
-        private static string GetClickHouseType(string typeName, ITableColumn col)
+        private static string GetClickHouseType(ITableColumn col)
         {
             var type = col.DataType;
-            if (SqlTypeMapper.IsCharTypeDefinition(typeName))
+            if (SqlTypeMapper.IsCharTypeDefinition(col.DataType.Trim().ToUpper()))
             {
                 type = "String";
             }
