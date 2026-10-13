@@ -12,6 +12,7 @@
   <ItemGroup>
     <ProjectReference Include="..\EtlKit.Common\EtlKit.Common.csproj" />
     <ProjectReference Include="..\EtlKit\EtlKit.csproj" />
+    <ProjectReference Include="..\EtlKit.ClickHouse\EtlKit.ClickHouse.csproj" />
   </ItemGroup>
 
   <ItemGroup>

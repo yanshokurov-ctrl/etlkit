@@ -1,0 +1,308 @@
+#nullable enable
+using EtlKit.ConnectionManager;
+using EtlKit.Primitives;
+using Xunit;
+
+namespace EtlKit.Common.Tests;
+
+/// <summary>
+/// Characterization tests for the driver-dependent half of <see cref="DataTypeConverter"/>:
+/// <see cref="DataTypeConverter.TryGetDBSpecificType"/>, which rewrites a column's SQL type for the
+/// target engine. They pin today's per-engine rules, quirks included (upper-casing, untrimmed
+/// pass-through, <c>varchar(max)</c> not counting as a char type), so the rules can move out of
+/// the central <c>switch</c> without changing what <c>CreateTableTask</c> emits. A quirk pinned
+/// here is not an endorsement: fixing one is a separate change that updates its expectation on
+/// purpose.
+/// </summary>
+public sealed class DataTypeConverterDriverConventionsTests
+{
+    private static string MapType(
+        ConnectionManagerType engine,
+        string dataType,
+        bool allowNulls = false
+    ) =>
+        DataTypeConverter.TryGetDBSpecificType(
+            new TableColumn("col", dataType, allowNulls),
+            engine
+        );
+
+    // ── matrix: every engine x typical column types x nullability ────────────
+
+    private sealed record EngineRow(
+        ConnectionManagerType Engine,
+        string[] Expected,
+        string[]? ExpectedWhenNullable = null
+    );
+
+    // Columns of every row below, in this order. ExpectedWhenNullable is only given for engines
+    // whose result depends on AllowNulls; for the others both nullabilities share Expected.
+    // Engines without conventions expect every type back unchanged, i.e. MatrixTypes itself.
+    private static readonly string[] MatrixTypes =
+    [
+        "TEXT",
+        "INT",
+        "BIGINT",
+        "VARCHAR(10)",
+        "NVARCHAR(300)",
+        "DATETIME",
+    ];
+
+    private static readonly EngineRow[] Matrix =
+    [
+        new(ConnectionManagerType.Unknown, MatrixTypes),
+        new(ConnectionManagerType.Adomd, MatrixTypes),
+        new(ConnectionManagerType.MySql, MatrixTypes),
+        new(
+            ConnectionManagerType.SqlServer,
+            ["VARCHAR(MAX)", "INT", "BIGINT", "VARCHAR(10)", "NVARCHAR(300)", "DATETIME"]
+        ),
+        new(
+            ConnectionManagerType.SQLite,
+            ["TEXT", "INTEGER", "INTEGER", "VARCHAR(10)", "NVARCHAR(300)", "DATETIME"]
+        ),
+        new(
+            ConnectionManagerType.Access,
+            ["TEXT", "INTEGER", "BIGINT", "VARCHAR(10)", "LONGTEXT", "DATETIME"]
+        ),
+        new(
+            ConnectionManagerType.Postgres,
+            ["TEXT", "INT", "BIGINT", "VARCHAR(10)", "VARCHAR(300)", "TIMESTAMP"]
+        ),
+        new(
+            ConnectionManagerType.ClickHouse,
+            ["TEXT", "INT", "BIGINT", "String", "String", "DATETIME"],
+            [
+                "Nullable(TEXT)",
+                "Nullable(INT)",
+                "Nullable(BIGINT)",
+                "Nullable(String)",
+                "Nullable(String)",
+                "Nullable(DATETIME)",
+            ]
+        ),
+    ];
+
+    public static TheoryData<ConnectionManagerType, string, bool, string> MatrixCases
+    {
+        get
+        {
+            var data = new TheoryData<ConnectionManagerType, string, bool, string>();
+            foreach (var row in Matrix)
+            {
+                for (var i = 0; i < MatrixTypes.Length; i++)
+                {
+                    data.Add(row.Engine, MatrixTypes[i], false, row.Expected[i]);
+                    data.Add(
+                        row.Engine,
+                        MatrixTypes[i],
+                        true,
+                        (row.ExpectedWhenNullable ?? row.Expected)[i]
+                    );
+                }
+            }
+            return data;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(MatrixCases))]
+    public void TryGetDBSpecificType_Matrix_ReturnsEngineSpecificType(
+        ConnectionManagerType engine,
+        string dataType,
+        bool allowNulls,
+        string expected
+    ) => Assert.Equal(expected, MapType(engine, dataType, allowNulls));
+
+    // Adding an engine must be a conscious decision: it has to get a row in the matrix above.
+    [Fact]
+    public void Matrix_CoversEveryConnectionManagerType()
+    {
+        var covered = Matrix.Select(row => row.Engine).ToHashSet();
+
+        var missing = Enum.GetValues<ConnectionManagerType>()
+            .Where(engine => !covered.Contains(engine))
+            .ToList();
+
+        Assert.Empty(missing);
+    }
+
+    // ── engines without conventions ──────────────────────────────────────────
+
+    public static TheoryData<ConnectionManagerType, string, bool> UnchangedCases
+    {
+        get
+        {
+            var data = new TheoryData<ConnectionManagerType, string, bool>();
+            foreach (
+                var engine in new[]
+                {
+                    ConnectionManagerType.Unknown,
+                    ConnectionManagerType.Adomd,
+                    ConnectionManagerType.MySql,
+                }
+            )
+            {
+                foreach (
+                    var dataType in new[]
+                    {
+                        "text",
+                        "  int  ",
+                        "nvarchar(300)",
+                        "Nullable(Int32)",
+                        "datetime",
+                    }
+                )
+                {
+                    data.Add(engine, dataType, false);
+                    data.Add(engine, dataType, true);
+                }
+            }
+            return data;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(UnchangedCases))]
+    public void TryGetDBSpecificType_EngineWithoutConventions_ReturnsDataTypeVerbatim(
+        ConnectionManagerType engine,
+        string dataType,
+        bool allowNulls
+    ) => Assert.Equal(dataType, MapType(engine, dataType, allowNulls));
+
+    [Fact]
+    public void TryGetDBSpecificType_UndefinedEngineValue_ReturnsDataTypeVerbatim() =>
+        Assert.Equal("  nvarchar(300) ", MapType((ConnectionManagerType)999, "  nvarchar(300) "));
+
+    [Fact]
+    public void TryGetDBSpecificType_DoesNotModifyTheColumn()
+    {
+        var column = new TableColumn("col", "  nvarchar(300) ", allowNulls: true);
+
+        foreach (var engine in Enum.GetValues<ConnectionManagerType>())
+            DataTypeConverter.TryGetDBSpecificType(column, engine);
+
+        Assert.Equal("  nvarchar(300) ", column.DataType);
+        Assert.True(column.AllowNulls);
+    }
+
+    // ── SQL Server ───────────────────────────────────────────────────────────
+
+    // Only TEXT is rewritten; the comparison ignores case, surrounding whitespace and inner
+    // spaces. Everything else is returned verbatim, including its original casing and spaces.
+    [Theory]
+    [InlineData("TEXT", "VARCHAR(MAX)")]
+    [InlineData("text", "VARCHAR(MAX)")]
+    [InlineData("  Text  ", "VARCHAR(MAX)")]
+    [InlineData("te xt", "VARCHAR(MAX)")]
+    [InlineData("ntext", "ntext")]
+    [InlineData("varchar(max)", "varchar(max)")]
+    [InlineData("int", "int")]
+    [InlineData("  int  ", "  int  ")]
+    [InlineData("nvarchar(300)", "nvarchar(300)")]
+    [InlineData("datetime", "datetime")]
+    public void TryGetDBSpecificType_SqlServer_RewritesOnlyText(string dataType, string expected) =>
+        Assert.Equal(expected, MapType(ConnectionManagerType.SqlServer, dataType));
+
+    // ── Access ───────────────────────────────────────────────────────────────
+
+    // INT becomes INTEGER; char types lose a leading N and come back upper-cased, or become
+    // LONGTEXT above 255 characters. Everything else is returned verbatim.
+    [Theory]
+    [InlineData("INT", "INTEGER")]
+    [InlineData("int", "INTEGER")]
+    [InlineData("  Int ", "INTEGER")]
+    [InlineData("varchar(50)", "VARCHAR(50)")]
+    [InlineData("nvarchar(50)", "VARCHAR(50)")]
+    [InlineData("NCHAR(10)", "CHAR(10)")]
+    [InlineData("char(10)", "CHAR(10)")]
+    [InlineData("  varchar(50)  ", "VARCHAR(50)")]
+    [InlineData("varchar(255)", "VARCHAR(255)")]
+    [InlineData("nvarchar(255)", "VARCHAR(255)")]
+    [InlineData("varchar(256)", "LONGTEXT")]
+    [InlineData("nvarchar(300)", "LONGTEXT")]
+    [InlineData("char(1000)", "LONGTEXT")]
+    [InlineData("bigint", "bigint")]
+    [InlineData("integer", "integer")]
+    [InlineData("text", "text")]
+    [InlineData("datetime", "datetime")]
+    [InlineData("varchar(max)", "varchar(max)")]
+    [InlineData("  bigint  ", "  bigint  ")]
+    public void TryGetDBSpecificType_Access_AdaptsIntAndCharTypes(
+        string dataType,
+        string expected
+    ) => Assert.Equal(expected, MapType(ConnectionManagerType.Access, dataType));
+
+    // ── SQLite ───────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("int", "INTEGER")]
+    [InlineData("INT", "INTEGER")]
+    [InlineData("  int  ", "INTEGER")]
+    [InlineData("bigint", "INTEGER")]
+    [InlineData("BigInt", "INTEGER")]
+    [InlineData("integer", "integer")]
+    [InlineData("smallint", "smallint")]
+    [InlineData("tinyint", "tinyint")]
+    [InlineData("  tinyint  ", "  tinyint  ")]
+    [InlineData("varchar(50)", "varchar(50)")]
+    [InlineData("text", "text")]
+    [InlineData("datetime", "datetime")]
+    public void TryGetDBSpecificType_SQLite_MapsIntAndBigIntToInteger(
+        string dataType,
+        string expected
+    ) => Assert.Equal(expected, MapType(ConnectionManagerType.SQLite, dataType));
+
+    // ── PostgreSQL ───────────────────────────────────────────────────────────
+
+    // A char type starting with N loses it and comes back upper-cased; a char type without a
+    // leading N is returned verbatim (original casing). DATETIME becomes TIMESTAMP, but datetime2
+    // is left alone even though PostgreSQL has no such type.
+    [Theory]
+    [InlineData("nvarchar(50)", "VARCHAR(50)")]
+    [InlineData("NVARCHAR(50)", "VARCHAR(50)")]
+    [InlineData("nchar(10)", "CHAR(10)")]
+    [InlineData("varchar(50)", "varchar(50)")]
+    [InlineData("VARCHAR(50)", "VARCHAR(50)")]
+    [InlineData("char(5)", "char(5)")]
+    [InlineData("datetime", "TIMESTAMP")]
+    [InlineData("DATETIME", "TIMESTAMP")]
+    [InlineData("  DateTime  ", "TIMESTAMP")]
+    [InlineData("datetime2", "datetime2")]
+    [InlineData("timestamp", "timestamp")]
+    [InlineData("int", "int")]
+    [InlineData("text", "text")]
+    [InlineData("bit", "bit")]
+    [InlineData("nvarchar(max)", "nvarchar(max)")]
+    [InlineData("ntext", "ntext")]
+    public void TryGetDBSpecificType_Postgres_AdaptsCharTypesAndDateTime(
+        string dataType,
+        string expected
+    ) => Assert.Equal(expected, MapType(ConnectionManagerType.Postgres, dataType));
+
+    // ── ClickHouse ───────────────────────────────────────────────────────────
+
+    // Char types become String; a nullable column is wrapped in Nullable(...) unless its type
+    // already starts with "Nullable". The wrap is the only place AllowNulls matters.
+    [Theory]
+    [InlineData("Int32", false, "Int32")]
+    [InlineData("Int32", true, "Nullable(Int32)")]
+    [InlineData("String", false, "String")]
+    [InlineData("String", true, "Nullable(String)")]
+    [InlineData("varchar(50)", false, "String")]
+    [InlineData("varchar(50)", true, "Nullable(String)")]
+    [InlineData("NVARCHAR(100)", false, "String")]
+    [InlineData("nchar(10)", true, "Nullable(String)")]
+    [InlineData("Nullable(Int32)", false, "Nullable(Int32)")]
+    [InlineData("Nullable(Int32)", true, "Nullable(Int32)")]
+    [InlineData("Nullable(String)", true, "Nullable(String)")]
+    [InlineData("varchar(max)", false, "varchar(max)")]
+    [InlineData("varchar(max)", true, "Nullable(varchar(max))")]
+    [InlineData("text", false, "text")]
+    [InlineData("datetime", true, "Nullable(datetime)")]
+    [InlineData("  Int32  ", false, "  Int32  ")]
+    public void TryGetDBSpecificType_ClickHouse_AdaptsCharTypesAndWrapsNullable(
+        string dataType,
+        bool allowNulls,
+        string expected
+    ) => Assert.Equal(expected, MapType(ConnectionManagerType.ClickHouse, dataType, allowNulls));
+}
