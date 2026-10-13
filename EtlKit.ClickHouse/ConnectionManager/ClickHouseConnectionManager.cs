@@ -161,7 +161,7 @@ FORMAT CSV
 
         private static string? ConvertToValueType(object r, string dataType)
         {
-            return !DataTypeConverter.IsCharTypeDefinition(dataType) && !dataType.Contains("STR")
+            return !SqlTypeMapper.IsCharTypeDefinition(dataType) && !dataType.Contains("STR")
                 ? ConvertStringToNonStringType(r, dataType)
                 : $@"""{r.ToString()!.Replace(@"""", @"""""")}""";
         }

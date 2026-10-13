@@ -1,4 +1,4 @@
-﻿using EtlKit.ConnectionManager;
+﻿using EtlKit.Common;
 using EtlKit.Primitives;
 
 namespace EtlKit
@@ -20,7 +20,7 @@ namespace EtlKit
         public object Value { get; }
 
         /// <inheritdoc />
-        public DbType DBType => DataTypeConverter.GetDBType(Type);
+        public DbType DBType => SqlTypeMapper.GetDBType(Type);
 
         /// <summary>
         /// Creates a parameter with the given name, type, and value. A <see langword="null"/> <paramref

@@ -1,41 +1,48 @@
 #nullable enable
 using System.Data;
-using EtlKit.ConnectionManager;
 using Xunit;
 
 namespace EtlKit.Common.Tests;
 
 /// <summary>
-/// Characterization tests for the driver-independent half of <see cref="DataTypeConverter"/>:
-/// SQL type name to .NET type / <see cref="DbType"/> mapping, char-type parsing and the default
-/// lengths. They pin today's behavior, quirks included, so the mapping can be moved to another
-/// assembly without changing it (see docs/tech-debt/TECH-DEBT-DataTypeConverter-Driver-Split.md).
-/// A quirk pinned here is not an endorsement: fixing one is a separate change that updates its
-/// expectation on purpose.
+/// Behavioral contract of the driver-independent SQL type mapping: SQL type name to .NET type /
+/// <see cref="DbType"/> mapping, char-type parsing and the default lengths. Every implementation
+/// runs the same expectations, so the mapping can move between assemblies without changing; the
+/// concrete subclasses are <see cref="SqlTypeMapperTests"/> and <see
+/// cref="DataTypeConverterForwardingTests"/>. The expectations pin today's behavior, quirks
+/// included. A quirk pinned here is not an endorsement: fixing one is a separate change that
+/// updates its expectation on purpose.
 /// </summary>
-public sealed class DataTypeConverterTests
+public abstract class SqlTypeMappingContractTests
 {
+    protected abstract string GetNETObjectTypeString(string? sqlType);
+
+    protected abstract Type? GetTypeObject(string sqlType);
+
+    protected abstract DbType GetDBType(string? sqlType);
+
+    protected abstract bool IsCharTypeDefinition(string definition);
+
+    protected abstract int GetStringLengthFromCharString(string definition);
+
+    protected abstract DateTimeKind? GetNETDateTimeKind(string? sqlType);
+
+    /// <summary>
+    /// The default lengths in this order: tiny integer, small integer, integer, big integer,
+    /// datetime2, datetime, decimal, string.
+    /// </summary>
+    protected abstract int[] DefaultLengths { get; }
+
+    protected abstract int DefaultStringLength { get; }
+
     // ── default lengths ──────────────────────────────────────────────────────
 
     [Fact]
     public void DefaultLengthConstants_HaveExpectedValues()
     {
-        Assert.Equal(5, DataTypeConverter.DefaultTinyIntegerLength);
-        Assert.Equal(7, DataTypeConverter.DefaultSmallIntegerLength);
-        Assert.Equal(11, DataTypeConverter.DefaultIntegerLength);
-        Assert.Equal(21, DataTypeConverter.DefaultBigIntegerLength);
-        Assert.Equal(41, DataTypeConverter.DefaultDateTime2Length);
-        Assert.Equal(27, DataTypeConverter.DefaultDateTimeLength);
-        Assert.Equal(41, DataTypeConverter.DefaultDecimalLength);
-        Assert.Equal(255, DataTypeConverter.DefaultStringLength);
+        Assert.Equal(new[] { 5, 7, 11, 21, 41, 27, 41, 255 }, DefaultLengths);
+        Assert.Equal(255, DefaultStringLength);
     }
-
-    [Fact]
-    public void FullName_IsStable() =>
-        Assert.Equal(
-            "EtlKit.ConnectionManager.DataTypeConverter",
-            typeof(DataTypeConverter).FullName
-        );
 
     // ── GetNETObjectTypeString ───────────────────────────────────────────────
 
@@ -76,7 +83,7 @@ public sealed class DataTypeConverterTests
     public void GetNETObjectTypeString_KnownSqlType_ReturnsDotNetTypeName(
         string sqlType,
         string expected
-    ) => Assert.Equal(expected, DataTypeConverter.GetNETObjectTypeString(sqlType));
+    ) => Assert.Equal(expected, GetNETObjectTypeString(sqlType));
 
     [Theory]
     [InlineData("INT", "System.Int32")]
@@ -87,7 +94,7 @@ public sealed class DataTypeConverterTests
     public void GetNETObjectTypeString_IgnoresCaseAndSurroundingSpaces(
         string sqlType,
         string expected
-    ) => Assert.Equal(expected, DataTypeConverter.GetNETObjectTypeString(sqlType));
+    ) => Assert.Equal(expected, GetNETObjectTypeString(sqlType));
 
     [Theory]
     [InlineData("int(11)", "System.Int32")]
@@ -102,7 +109,7 @@ public sealed class DataTypeConverterTests
     public void GetNETObjectTypeString_IgnoresLengthAndPrecisionSuffix(
         string sqlType,
         string expected
-    ) => Assert.Equal(expected, DataTypeConverter.GetNETObjectTypeString(sqlType));
+    ) => Assert.Equal(expected, GetNETObjectTypeString(sqlType));
 
     [Theory]
     [InlineData("varchar")]
@@ -119,13 +126,13 @@ public sealed class DataTypeConverterTests
     [InlineData("")]
     [InlineData("   ")]
     public void GetNETObjectTypeString_UnmappedSqlType_ReturnsString(string sqlType) =>
-        Assert.Equal("System.String", DataTypeConverter.GetNETObjectTypeString(sqlType));
+        Assert.Equal("System.String", GetNETObjectTypeString(sqlType));
 
     // A parenthesis at position 0 is not treated as the start of a suffix, so the whole
     // text is looked up and, not being a known name, falls back to String.
     [Fact]
     public void GetNETObjectTypeString_LeadingParenthesis_IsNotStripped() =>
-        Assert.Equal("System.String", DataTypeConverter.GetNETObjectTypeString("(int)"));
+        Assert.Equal("System.String", GetNETObjectTypeString("(int)"));
 
     // ── GetTypeObject ────────────────────────────────────────────────────────
 
@@ -142,7 +149,7 @@ public sealed class DataTypeConverterTests
     [InlineData("varchar(10)", typeof(string))]
     [InlineData("something-unknown", typeof(string))]
     public void GetTypeObject_ReturnsTheMappedDotNetType(string sqlType, Type expected) =>
-        Assert.Equal(expected, DataTypeConverter.GetTypeObject(sqlType));
+        Assert.Equal(expected, GetTypeObject(sqlType));
 
     // ── GetDBType ────────────────────────────────────────────────────────────
 
@@ -171,7 +178,7 @@ public sealed class DataTypeConverterTests
     [InlineData("unknown_type", DbType.String)]
     [InlineData("", DbType.String)]
     public void GetDBType_SqlTypeName_ReturnsMatchingDbType(string sqlType, DbType expected) =>
-        Assert.Equal(expected, DataTypeConverter.GetDBType(sqlType));
+        Assert.Equal(expected, GetDBType(sqlType));
 
     // The input is a SQL type name, not a .NET type name. A .NET name is recognized only when it
     // happens to coincide with a SQL alias, so passing "Int64" silently yields DbType.String.
@@ -183,7 +190,7 @@ public sealed class DataTypeConverterTests
     [InlineData("Byte")]
     [InlineData("System.Int64")]
     public void GetDBType_DotNetTypeName_IsNotASqlAliasAndFallsBackToString(string typeName) =>
-        Assert.Equal(DbType.String, DataTypeConverter.GetDBType(typeName));
+        Assert.Equal(DbType.String, GetDBType(typeName));
 
     [Theory]
     [InlineData("Boolean", DbType.Boolean)]
@@ -193,11 +200,11 @@ public sealed class DataTypeConverterTests
     public void GetDBType_DotNetTypeName_MatchesOnlyWhenItIsAlsoASqlAlias(
         string typeName,
         DbType expected
-    ) => Assert.Equal(expected, DataTypeConverter.GetDBType(typeName));
+    ) => Assert.Equal(expected, GetDBType(typeName));
 
     [Fact]
     public void GetDBType_NullTypeName_FallsBackToString() =>
-        Assert.Equal(DbType.String, DataTypeConverter.GetDBType(null));
+        Assert.Equal(DbType.String, GetDBType(null));
 
     // ── IsCharTypeDefinition ─────────────────────────────────────────────────
 
@@ -211,7 +218,7 @@ public sealed class DataTypeConverterTests
     [InlineData(" char(3) ")]
     [InlineData("varchar(10) NOT NULL")]
     public void IsCharTypeDefinition_CharTypeWithLength_ReturnsTrue(string definition) =>
-        Assert.True(DataTypeConverter.IsCharTypeDefinition(definition));
+        Assert.True(IsCharTypeDefinition(definition));
 
     // varchar(max) does not count: the length must be digits.
     [Theory]
@@ -226,7 +233,7 @@ public sealed class DataTypeConverterTests
     [InlineData("string")]
     [InlineData("")]
     public void IsCharTypeDefinition_AnythingElse_ReturnsFalse(string definition) =>
-        Assert.False(DataTypeConverter.IsCharTypeDefinition(definition));
+        Assert.False(IsCharTypeDefinition(definition));
 
     // ── GetStringLengthFromCharString ────────────────────────────────────────
 
@@ -243,7 +250,7 @@ public sealed class DataTypeConverterTests
     public void GetStringLengthFromCharString_CharTypeWithLength_ReturnsTheLength(
         string definition,
         int expected
-    ) => Assert.Equal(expected, DataTypeConverter.GetStringLengthFromCharString(definition));
+    ) => Assert.Equal(expected, GetStringLengthFromCharString(definition));
 
     [Theory]
     [InlineData("varchar")]
@@ -254,20 +261,13 @@ public sealed class DataTypeConverterTests
     [InlineData("")]
     public void GetStringLengthFromCharString_NoNumericLength_ReturnsDefaultStringLength(
         string definition
-    ) =>
-        Assert.Equal(
-            DataTypeConverter.DefaultStringLength,
-            DataTypeConverter.GetStringLengthFromCharString(definition)
-        );
+    ) => Assert.Equal(DefaultStringLength, GetStringLengthFromCharString(definition));
 
     // Text before the char type is swallowed by the match, text after it is kept and breaks the
     // integer parse, so the default length wins even though a length is present.
     [Fact]
     public void GetStringLengthFromCharString_TrailingText_FallsBackToDefaultStringLength() =>
-        Assert.Equal(
-            DataTypeConverter.DefaultStringLength,
-            DataTypeConverter.GetStringLengthFromCharString("varchar(10) NOT NULL")
-        );
+        Assert.Equal(DefaultStringLength, GetStringLengthFromCharString("varchar(10) NOT NULL"));
 
     // ── GetNETDateTimeKind ───────────────────────────────────────────────────
 
@@ -279,13 +279,13 @@ public sealed class DataTypeConverterTests
     [InlineData("time")]
     [InlineData("timestamp")]
     public void GetNETDateTimeKind_DateTimeType_ReturnsUnspecified(string sqlType) =>
-        Assert.Equal(DateTimeKind.Unspecified, DataTypeConverter.GetNETDateTimeKind(sqlType));
+        Assert.Equal(DateTimeKind.Unspecified, GetNETDateTimeKind(sqlType));
 
     [Theory]
     [InlineData("timetz")]
     [InlineData("timestamptz")]
     public void GetNETDateTimeKind_TimeZoneAwareType_ReturnsUtc(string sqlType) =>
-        Assert.Equal(DateTimeKind.Utc, DataTypeConverter.GetNETDateTimeKind(sqlType));
+        Assert.Equal(DateTimeKind.Utc, GetNETDateTimeKind(sqlType));
 
     [Theory]
     [InlineData("int")]
@@ -293,11 +293,11 @@ public sealed class DataTypeConverterTests
     [InlineData("datetimeoffset")]
     [InlineData("")]
     public void GetNETDateTimeKind_NonDateTimeType_ReturnsNull(string sqlType) =>
-        Assert.Null(DataTypeConverter.GetNETDateTimeKind(sqlType));
+        Assert.Null(GetNETDateTimeKind(sqlType));
 
     [Fact]
     public void GetNETDateTimeKind_NullTypeName_ReturnsNull() =>
-        Assert.Null(DataTypeConverter.GetNETDateTimeKind(null));
+        Assert.Null(GetNETDateTimeKind(null));
 
     // Unlike GetNETObjectTypeString, this lookup is case-sensitive and does not strip a length
     // suffix, so only the exact lower-case name matches.
@@ -308,5 +308,5 @@ public sealed class DataTypeConverterTests
     [InlineData(" datetime")]
     [InlineData("datetime2(7)")]
     public void GetNETDateTimeKind_IsCaseSensitiveAndExact(string sqlType) =>
-        Assert.Null(DataTypeConverter.GetNETDateTimeKind(sqlType));
+        Assert.Null(GetNETDateTimeKind(sqlType));
 }

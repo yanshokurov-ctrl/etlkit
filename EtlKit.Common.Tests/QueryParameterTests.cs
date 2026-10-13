@@ -8,8 +8,8 @@ namespace EtlKit.Common.Tests;
 /// <summary>
 /// Characterization tests for <see cref="QueryParameter"/>, which derives its <see
 /// cref="QueryParameter.DBType"/> from a SQL type name via <see
-/// cref="EtlKit.ConnectionManager.DataTypeConverter.GetDBType"/>. They pin the behavior the type
-/// must keep when it moves to another assembly (see
+/// cref="SqlTypeMapper.GetDBType"/>. They pin the behavior the type must keep when it moves to
+/// another assembly (see
 /// docs/tech-debt/TECH-DEBT-DataTypeConverter-Driver-Split.md).
 /// </summary>
 public sealed class QueryParameterTests

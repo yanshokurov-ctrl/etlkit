@@ -5,10 +5,9 @@ namespace EtlKit.Common.Tests;
 
 /// <summary>
 /// Characterization tests for the two <see cref="TableColumn"/> properties that delegate to the
-/// type mapping in <see cref="EtlKit.ConnectionManager.DataTypeConverter"/>: <see
-/// cref="TableColumn.NETDataType"/> and <see cref="TableColumn.NETDateTimeKind"/>. They guard the
-/// call sites that will be rewired when the mapping moves (see
-/// docs/tech-debt/TECH-DEBT-DataTypeConverter-Driver-Split.md).
+/// type mapping in <see cref="SqlTypeMapper"/>: <see cref="TableColumn.NETDataType"/> and <see
+/// cref="TableColumn.NETDateTimeKind"/>. They guard the call sites that were rewired when the
+/// mapping moved (see docs/tech-debt/TECH-DEBT-DataTypeConverter-Driver-Split.md).
 /// </summary>
 public sealed class TableColumnTypeMappingTests
 {
