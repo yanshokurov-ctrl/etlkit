@@ -5,13 +5,10 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
-
-using EtlKit.Primitives;
-
 using EtlKit.Common.ControlFlow;
 using EtlKit.Common.DataFlow;
 using EtlKit.Common.DataFlow.Streaming;
-
+using EtlKit.Primitives;
 using JetBrains.Annotations;
 
 namespace EtlKit.DataFlow;
@@ -157,7 +154,7 @@ public class PostgresXminTailSource<TOutput> : DataFlowSource<TOutput>
         query.Append("SELECT *, xmin::text::bigint AS _xmin_val FROM ");
         query.Append(QuotedTableRef());
         query.Append(" WHERE xmin::text::bigint < @_frontier");
-        parameters.Add(new QueryParameter("_frontier", frontier));
+        parameters.Add(Parameter("_frontier", frontier));
 
         if (cursor != null && OrderByColumns.Length > 0)
         {
@@ -178,7 +175,7 @@ public class PostgresXminTailSource<TOutput> : DataFlowSource<TOutput>
         }
 
         query.Append(" LIMIT @_batchSize");
-        parameters.Add(new QueryParameter("_batchSize", BatchSize));
+        parameters.Add(Parameter("_batchSize", BatchSize));
 
         return query.ToString();
     }
@@ -200,7 +197,7 @@ public class PostgresXminTailSource<TOutput> : DataFlowSource<TOutput>
             var paramName = "_cursor" + i;
             query.Append('@');
             query.Append(paramName);
-            parameters.Add(new QueryParameter(paramName, values[i] ?? DBNull.Value));
+            parameters.Add(Parameter(paramName, values[i] ?? DBNull.Value));
         }
 
         query.Append(")");
@@ -252,29 +249,18 @@ public class PostgresXminTailSource<TOutput> : DataFlowSource<TOutput>
         return found ? new object?[] { position } : null;
     }
 
-    private sealed class QueryParameter : IQueryParameter
-    {
-        public string Name { get; }
-        public string Type { get; } = string.Empty;
-        public object Value { get; }
-        public DbType DBType { get; }
+    private static IQueryParameter Parameter(string name, object value) =>
+        new QueryParameter(name, MapDbType(value), value);
 
-        public QueryParameter(string name, object value)
+    // The DbType follows the runtime value, not a SQL type name: integers widen to Int64.
+    private static DbType MapDbType(object value) =>
+        value switch
         {
-            Name = name;
-            Value = value;
-            DBType = MapDbType(value);
-        }
-
-        private static DbType MapDbType(object value) =>
-            value switch
-            {
-                long or int or short => DbType.Int64,
-                DateTime => DbType.DateTime2,
-                DateTimeOffset => DbType.DateTimeOffset,
-                string => DbType.String,
-                Guid => DbType.Guid,
-                _ => DbType.Object,
-            };
-    }
+            long or int or short => DbType.Int64,
+            DateTime => DbType.DateTime2,
+            DateTimeOffset => DbType.DateTimeOffset,
+            string => DbType.String,
+            Guid => DbType.Guid,
+            _ => DbType.Object,
+        };
 }

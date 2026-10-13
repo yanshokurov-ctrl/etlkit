@@ -6,11 +6,10 @@ using Xunit;
 namespace EtlKit.Common.Tests;
 
 /// <summary>
-/// Characterization tests for <see cref="QueryParameter"/>, which derives its <see
-/// cref="QueryParameter.DBType"/> from a SQL type name via <see
-/// cref="SqlTypeMapper.GetDBType"/>. They pin the behavior the type must keep when it moves to
-/// another assembly (see
-/// docs/tech-debt/TECH-DEBT-DataTypeConverter-Driver-Split.md).
+/// Tests for <see cref="QueryParameter"/>, which derives its <see cref="QueryParameter.DBType"/>
+/// from a SQL type name via <see cref="SqlTypeMapper.GetDBType"/> unless it was given an explicit
+/// <see cref="DbType"/>. The type lives in EtlKit.Common but keeps its full name and is forwarded
+/// from the main EtlKit assembly (see docs/tech-debt/TECH-DEBT-DataTypeConverter-Driver-Split.md).
 /// </summary>
 public sealed class QueryParameterTests
 {
@@ -18,6 +17,18 @@ public sealed class QueryParameterTests
     [Fact]
     public void FullName_IsStable() =>
         Assert.Equal("EtlKit.QueryParameter", typeof(QueryParameter).FullName);
+
+    // The main assembly forwards the type, so assemblies compiled against an older EtlKit that
+    // defined QueryParameter itself keep resolving it.
+    [Fact]
+    public void LivesInCommon_AndIsForwardedFromTheMainAssembly()
+    {
+        var mainAssembly = typeof(TableColumn).Assembly;
+
+        Assert.Equal("EtlKit.Common", typeof(QueryParameter).Assembly.GetName().Name);
+        Assert.Contains(typeof(QueryParameter), mainAssembly.GetForwardedTypes());
+        Assert.Same(typeof(QueryParameter), mainAssembly.GetType("EtlKit.QueryParameter"));
+    }
 
     [Fact]
     public void ImplementsIQueryParameter() =>
@@ -66,8 +77,8 @@ public sealed class QueryParameterTests
         Assert.Equal(DbType.String, new QueryParameter("p", null, 1).DBType);
 
     // The type is a SQL type name, not a .NET type name: "Int64" is not a SQL alias, so the
-    // parameter silently becomes a string. A caller that knows the DbType up front cannot say so
-    // through this constructor.
+    // parameter silently becomes a string. A caller that knows the DbType up front passes it to
+    // the constructor that takes a DbType instead.
     [Theory]
     [InlineData("Int16")]
     [InlineData("Int32")]
@@ -76,4 +87,34 @@ public sealed class QueryParameterTests
     [InlineData("System.Int64")]
     public void DBType_DotNetTypeName_FallsBackToString(string type) =>
         Assert.Equal(DbType.String, new QueryParameter("p", type, 1).DBType);
+
+    // ── explicit DbType ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void ConstructorWithDbType_StoresNameAndValue()
+    {
+        var parameter = new QueryParameter("id", DbType.Int64, 42L);
+
+        Assert.Equal("id", parameter.Name);
+        Assert.Equal(42L, parameter.Value);
+    }
+
+    // DateTime2 and Object cannot be reached through a SQL type name at all.
+    [Theory]
+    [InlineData(DbType.Int64)]
+    [InlineData(DbType.String)]
+    [InlineData(DbType.Guid)]
+    [InlineData(DbType.DateTime2)]
+    [InlineData(DbType.DateTimeOffset)]
+    [InlineData(DbType.Object)]
+    public void ConstructorWithDbType_ExposesTheGivenDbType(DbType dbType) =>
+        Assert.Equal(dbType, new QueryParameter("p", dbType, 1).DBType);
+
+    [Fact]
+    public void ConstructorWithDbType_SetsTypeToTheDbTypeName() =>
+        Assert.Equal("Int64", new QueryParameter("p", DbType.Int64, 1L).Type);
+
+    [Fact]
+    public void ConstructorWithDbType_NullValue_IsStoredAsDBNull() =>
+        Assert.Same(DBNull.Value, new QueryParameter("p", DbType.String, null).Value);
 }
