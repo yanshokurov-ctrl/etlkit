@@ -129,21 +129,7 @@ namespace EtlKit.ConnectionManager
         public static string TryGetDBSpecificType(
             ITableColumn col,
             ConnectionManagerType connectionType
-        ) =>
-            connectionType switch
-            {
-                ConnectionManagerType.SqlServer => new SqlServerTypeConventions().GetDbSpecificType(
-                    col
-                ),
-                ConnectionManagerType.Access => new AccessTypeConventions().GetDbSpecificType(col),
-                ConnectionManagerType.SQLite => new SqliteTypeConventions().GetDbSpecificType(col),
-                ConnectionManagerType.Postgres => new PostgresTypeConventions().GetDbSpecificType(
-                    col
-                ),
-                // The ClickHouse rule lives in EtlKit.ClickHouse, which this assembly cannot reference.
-                ConnectionManagerType.ClickHouse => GetClickHouseType(col),
-                _ => col.DataType,
-            };
+        ) => new EngineKeyedTypeConventions(connectionType).GetDbSpecificType(col);
 
         /// <summary>
         /// Returns the <see cref="System.DateTimeKind"/> implied by a SQL date/time type name — <see
@@ -155,19 +141,5 @@ namespace EtlKit.ConnectionManager
         [Obsolete("Use EtlKit.Common.SqlTypeMapper.GetNETDateTimeKind instead.")]
         public static DateTimeKind? GetNETDateTimeKind(string dbSpecificTypeName) =>
             SqlTypeMapper.GetNETDateTimeKind(dbSpecificTypeName);
-
-        private static string GetClickHouseType(ITableColumn col)
-        {
-            var type = col.DataType;
-            if (SqlTypeMapper.IsCharTypeDefinition(col.DataType.Trim().ToUpper()))
-            {
-                type = "String";
-            }
-            if (col.AllowNulls && !type.StartsWith("Nullable"))
-            {
-                return $"Nullable({type})";
-            }
-            return type;
-        }
     }
 }

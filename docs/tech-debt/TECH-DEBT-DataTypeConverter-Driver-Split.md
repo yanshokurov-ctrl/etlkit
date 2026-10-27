@@ -49,8 +49,10 @@ it directly.
 - `IDbTypeConventions.GetDbSpecificType(ITableColumn)` (namespace `EtlKit.ConnectionManager`) returns
   the SQL type a column is created with on an engine.
 - Every `DbConnectionManager<TConnection>` exposes its engine's rules as the virtual property
-  `TypeConventions`; the default keeps the column's data type unchanged (MySQL, ADOMD, and any custom
-  manager that does not override it).
+  `TypeConventions`. The built-in managers override it with their own; by default it follows the engine
+  the manager reports as `ConnectionManagerType`, so a custom subclass that reports PostgreSQL keeps
+  getting the PostgreSQL rules, while MySQL and ADOMD, which have no special rules, keep every data type
+  unchanged. A subclass can override the property to supply its own rules.
 - The SQL Server (native and ODBC), PostgreSQL, SQLite and Access rules are internal classes next to
   their connection managers. The ClickHouse rule lives in `EtlKit.ClickHouse`.
 - `CreateTableTask` takes a column's SQL type from its connection manager's conventions, so the
@@ -60,12 +62,13 @@ The conventions come from the connection manager rather than from DI on purpose:
 are created with `new` and read the connection manager, so there is no service provider to resolve
 from. A DI registry can be added later behind the same property.
 
-The central `switch` survives only inside the obsolete `DataTypeConverter.TryGetDBSpecificType`.
-`CreateTableTask` still falls back to it for a custom `IConnectionManager` that is not a
-`DbConnectionManager<TConnection>`, so such managers keep behaving as before. That facade delegates to
-the same rule classes, except for ClickHouse, whose rule it has to keep a second copy of: the
-ClickHouse package depends on the main package, not the other way round. A test keeps the two copies
-from drifting apart.
+The central `switch` survives only inside the internal `EngineKeyedTypeConventions`. It serves the
+managers that supply no conventions of their own (a custom subclass of `DbConnectionManager<TConnection>`
+or `OdbcConnectionManager` keeps the rules of the engine it reports, as it did when the rules were
+picked by engine), a custom `IConnectionManager` that is not a `DbConnectionManager<TConnection>`, and
+the obsolete `DataTypeConverter.TryGetDBSpecificType`. It keeps a second copy of the ClickHouse rule:
+the ClickHouse package depends on the main package, not the other way round. A test keeps the two
+copies from drifting apart.
 
 ### 3. `QueryParameter` moved to `EtlKit.Common`
 
@@ -95,9 +98,8 @@ The two private copies are gone: the nested `Parameter` of `DbCheckpointStore` a
 - [ ] Split the SQL Server, PostgreSQL, MySQL, SQLite and Access connection managers, together with
   their conventions, into their own packages, as ClickHouse already is; add DI registration where
   that modularization introduces it.
-- [ ] Remove the obsolete `DataTypeConverter` and the second copy of the ClickHouse rule in the next
-  major version, together with `DataTypeConverterForwardingTests` and
-  `DataTypeConverterConventionsForwardingTests`.
+- [ ] Remove the obsolete `DataTypeConverter` and `EngineKeyedTypeConventions` (with the second copy of
+  the ClickHouse rule) in the next major version, together with the tests of the obsolete members.
 - [ ] The other `switch (ConnectionManagerType)` statements (identity, `NOT NULL`, comments, quoting
   helpers) in `CreateTableTask` and about thirty other files are a separate, larger refactoring.
 

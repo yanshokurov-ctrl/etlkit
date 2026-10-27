@@ -84,13 +84,17 @@ namespace EtlKit.ConnectionManager
         /// <inheritdoc />
         public virtual bool SupportComputedColumns { get; } = true;
 
+        private IDbTypeConventions _typeConventions;
+
         /// <summary>
         /// The engine-specific rules for the SQL type a column is created with, used for example by
-        /// <see cref="CreateTableTask"/>. Keeps every column's data type unchanged by default; derived
-        /// classes override this to supply their engine's rules.
+        /// <see cref="CreateTableTask"/>. Defaults to the rules of the engine this manager reports as its
+        /// <see cref="ConnectionManagerType"/> (every data type unchanged for an engine without special
+        /// rules), so a custom manager is treated as the engine it reports. Derived classes override this
+        /// to supply their own rules.
         /// </summary>
-        public virtual IDbTypeConventions TypeConventions { get; } =
-            new PassThroughTypeConventions();
+        public virtual IDbTypeConventions TypeConventions =>
+            _typeConventions ??= new EngineKeyedTypeConventions(ConnectionManagerType);
 
         IDbTypeConventions IDbTypeConventionsProvider.TypeConventions => TypeConventions;
 

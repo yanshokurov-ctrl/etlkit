@@ -175,4 +175,38 @@ public sealed class CreateTableTaskSqlTests
             BuildSql(manager, "Custom", columns)
         );
     }
+
+    // A user's own OdbcConnectionManager (here PostgreSQL over ODBC) reports its engine itself and
+    // must keep getting that engine's DDL, as it did when the rules were picked by engine.
+    [Fact]
+    public void Sql_OdbcSubclassReportingPostgres_UsesPostgresRules()
+    {
+        using var manager = new CustomOdbcConnectionManager(ConnectionManagerType.Postgres);
+        List<TableColumn> columns =
+        [
+            new("Name", "NVARCHAR(100)", allowNulls: false),
+            new("Created", "DATETIME", allowNulls: false),
+        ];
+
+        Assert.Equal(
+            "CREATE TABLE \"Custom\" ( \"Name\" VARCHAR(100) NOT NULL , \"Created\" TIMESTAMP NOT NULL )",
+            BuildSql(manager, "Custom", columns)
+        );
+    }
+
+    [Fact]
+    public void Sql_ManagerSupplyingItsOwnConventions_UsesThemInsteadOfTheEngineRules()
+    {
+        using var manager = new CustomManagerWithOwnConventions(new EveryColumnIsTextConventions());
+        List<TableColumn> columns =
+        [
+            new("Name", "NVARCHAR(100)", allowNulls: false),
+            new("Created", "DATETIME", allowNulls: false),
+        ];
+
+        Assert.Equal(
+            "CREATE TABLE \"Custom\" ( \"Name\" TEXT NOT NULL , \"Created\" TEXT NOT NULL )",
+            BuildSql(manager, "Custom", columns)
+        );
+    }
 }

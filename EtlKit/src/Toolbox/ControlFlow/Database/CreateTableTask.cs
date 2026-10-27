@@ -204,14 +204,13 @@ namespace EtlKit.ControlFlow
         }
 
         // Connection managers supply their own engine's rules. A custom IConnectionManager that is
-        // not a DbConnectionManager<T> has none and keeps the central, engine-keyed rules.
+        // not a DbConnectionManager<T> has none, so the rules of the engine it reports apply.
         private string GetDbSpecificType(ITableColumn col)
         {
-            if (DbConnectionManager is IDbTypeConventionsProvider provider)
-                return provider.TypeConventions.GetDbSpecificType(col);
-#pragma warning disable CS0618
-            return DataTypeConverter.TryGetDBSpecificType(col, ConnectionType);
-#pragma warning restore CS0618
+            var conventions = DbConnectionManager is IDbTypeConventionsProvider provider
+                ? provider.TypeConventions
+                : new EngineKeyedTypeConventions(ConnectionType);
+            return conventions.GetDbSpecificType(col);
         }
 
         private string CreateNotNullSql(ITableColumn col)
