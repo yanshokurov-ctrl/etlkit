@@ -12,8 +12,9 @@ namespace EtlKit.Common.Tests;
 internal static class TestConnectionManagers
 {
     /// <summary>
-    /// Names of every concrete connection manager in the solution, for <see cref="Get"/>. SQL
-    /// Server appears twice: the native manager and the ODBC one report the same engine.
+    /// Names of every concrete connection manager in the solution, for <see cref="Get"/>. All but
+    /// <c>SqlServerOdbc</c> match the <see cref="ConnectionManagerType"/> they report; SQL Server
+    /// appears twice because the native and the ODBC manager report the same engine.
     /// </summary>
     public static readonly string[] Names =
     [
@@ -27,35 +28,6 @@ internal static class TestConnectionManagers
         "Adomd",
     ];
 
-    /// <summary>
-    /// Creates the connection manager that represents <paramref name="engine"/>. There is none for
-    /// <see cref="ConnectionManagerType.Unknown"/>: no manager reports it.
-    /// </summary>
-    public static IConnectionManager Create(ConnectionManagerType engine) =>
-        engine switch
-        {
-            ConnectionManagerType.SqlServer => new SqlConnectionManager(
-                "Data Source=localhost;Initial Catalog=sample"
-            ),
-            ConnectionManagerType.Postgres => new PostgresConnectionManager(
-                "Host=localhost;Database=sample"
-            ),
-            ConnectionManagerType.MySql => new MySqlConnectionManager(
-                "Server=localhost;Database=sample"
-            ),
-            ConnectionManagerType.SQLite => new SQLiteConnectionManager("Data Source=:memory:"),
-            ConnectionManagerType.Access => new AccessOdbcConnectionManager("Dbq=sample.accdb"),
-            ConnectionManagerType.ClickHouse => new ClickHouseConnectionManager(
-                "Host=localhost;Database=sample"
-            ),
-            ConnectionManagerType.Adomd => new AdomdConnectionManager("Data Source=localhost"),
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(engine),
-                engine,
-                "No connection manager reports this engine."
-            ),
-        };
-
     // Ownership of each manager passes to the returned ManagerCase, which disposes it.
 #pragma warning disable CA2000
     /// <summary>
@@ -67,7 +39,7 @@ internal static class TestConnectionManagers
         {
             "SqlServer" => Case(
                 name,
-                new SqlConnectionManager("Data Source=localhost"),
+                new SqlConnectionManager("Data Source=localhost;Initial Catalog=sample"),
                 m => m.TypeConventions
             ),
             "SqlServerOdbc" => Case(
@@ -77,12 +49,12 @@ internal static class TestConnectionManagers
             ),
             "Postgres" => Case(
                 name,
-                new PostgresConnectionManager("Host=localhost"),
+                new PostgresConnectionManager("Host=localhost;Database=sample"),
                 m => m.TypeConventions
             ),
             "MySql" => Case(
                 name,
-                new MySqlConnectionManager("Server=localhost"),
+                new MySqlConnectionManager("Server=localhost;Database=sample"),
                 m => m.TypeConventions
             ),
             "SQLite" => Case(
@@ -97,7 +69,7 @@ internal static class TestConnectionManagers
             ),
             "ClickHouse" => Case(
                 name,
-                new ClickHouseConnectionManager("Host=localhost"),
+                new ClickHouseConnectionManager("Host=localhost;Database=sample"),
                 m => m.TypeConventions
             ),
             "Adomd" => Case(

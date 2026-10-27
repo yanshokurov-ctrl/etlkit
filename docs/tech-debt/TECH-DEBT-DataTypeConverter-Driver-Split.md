@@ -126,10 +126,11 @@ the matching expectation:
 
 ## Verification
 
-- `EtlKit.Common.Tests` (no database): contract tests for the mapping and for the conventions run
-  against both the new implementation and the obsolete facade; `CreateTableTask.Sql` is compared with
-  recorded DDL for six engines built from real, never opened connection managers; every concrete
-  connection manager is cross-checked against the facade.
+- `EtlKit.Common.Tests` (no database): the mapping and the per-engine conventions are pinned with
+  literal expectations, one check per obsolete `DataTypeConverter` member keeps the facade honest, and
+  `CreateTableTask.Sql` is compared with recorded DDL for six engines built from real, never opened
+  connection managers. Custom connection manager subclasses are checked to keep the rules of the
+  engine they report, and a guard fails when a concrete connection manager is not covered.
 - The integration tests for `CreateTableTask`, the ClickHouse connection manager and the database
   data-type tests were run against SQL Server, PostgreSQL, MySQL and ClickHouse containers before the
   first change and again after each step, with identical results. `PostgresXminTailSource` was run

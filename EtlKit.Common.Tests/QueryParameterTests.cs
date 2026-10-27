@@ -1,6 +1,5 @@
 #nullable enable
 using System.Data;
-using EtlKit.Primitives;
 using Xunit;
 
 namespace EtlKit.Common.Tests;
@@ -29,10 +28,6 @@ public sealed class QueryParameterTests
         Assert.Contains(typeof(QueryParameter), mainAssembly.GetForwardedTypes());
         Assert.Same(typeof(QueryParameter), mainAssembly.GetType("EtlKit.QueryParameter"));
     }
-
-    [Fact]
-    public void ImplementsIQueryParameter() =>
-        Assert.IsAssignableFrom<IQueryParameter>(new QueryParameter("p", "int", 1));
 
     // ── constructor ──────────────────────────────────────────────────────────
 

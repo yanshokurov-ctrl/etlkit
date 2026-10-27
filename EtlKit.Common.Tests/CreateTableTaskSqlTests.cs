@@ -24,8 +24,9 @@ public sealed class CreateTableTaskSqlTests
         List<TableColumn> columns
     )
     {
-        using var manager = TestConnectionManagers.Create(engine);
-        return BuildSql(manager, tableName, columns);
+        // The manager names in TestConnectionManagers match the ConnectionManagerType names.
+        using var managerCase = TestConnectionManagers.Get(engine.ToString());
+        return BuildSql(managerCase.Manager, tableName, columns);
     }
 
     private static string BuildSql(
